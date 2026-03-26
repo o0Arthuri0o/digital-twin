@@ -104,7 +104,6 @@ let renderer: THREE.WebGLRenderer
 let scene: THREE.Scene
 let camera: THREE.PerspectiveCamera
 let controls: OrbitControls
-let cube: THREE.Mesh
 let animationId: number
 
 export async function initViewer3D(container: HTMLElement) {
@@ -140,7 +139,7 @@ export async function initViewer3D(container: HTMLElement) {
   const ro = new ResizeObserver(() => handleResize(container))
   ro.observe(container)
 
-  const model = await loadModel(scene)
+  await loadModel(scene)
   animate()
 }
 
