@@ -244,6 +244,57 @@
 
     </div>
 
+    <!-- ══════════ HAND TRACKING PANEL ══════════ -->
+    <div class="hand-panel" id="handPanel">
+      <div class="hand-panel__header" id="handPanelHeader">
+        <div class="hand-panel__title-row">
+          <span class="panel__tag">HAND</span>
+          <h2 class="panel__title">Трекинг рук</h2>
+        </div>
+        <div class="hand-panel__header-actions">
+          <button class="btn btn--ghost btn--sm hand-panel__collapse" id="handPanelCollapse" title="Свернуть">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M3 5l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="hand-panel__body" id="handPanelBody">
+        <div class="hand-panel__video-wrap">
+          <video id="handVideo" autoplay playsinline muted></video>
+          <canvas id="handCanvas"></canvas>
+          <div class="hand-panel__status" id="handStatus">
+            <span class="hand-panel__status-dot"></span>
+            <span class="hand-panel__status-text">Камера выкл</span>
+          </div>
+        </div>
+        <div class="hand-panel__controls">
+          <button class="btn btn--primary btn--sm" id="btnStartHand">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M3 2l9 5-9 5V2z" fill="currentColor"/></svg>
+            Запустить
+          </button>
+          <button class="btn btn--danger btn--sm" id="btnStopHand" style="display: none;">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><rect x="2" y="2" width="10" height="10" rx="1" fill="currentColor"/></svg>
+            Остановить
+          </button>
+        </div>
+        <div class="hand-panel__settings">
+          <div class="hand-setting">
+            <label class="hand-setting__label">
+              <span>Чувствительность</span>
+              <span class="hand-setting__value" id="sensitivityValue">50%</span>
+            </label>
+            <input type="range" class="hand-setting__slider" id="sensitivitySlider" min="0" max="100" value="50">
+          </div>
+          <div class="hand-setting">
+            <label class="hand-setting__label">
+              <span>Захват (pinch)</span>
+              <span class="hand-setting__value" id="pinchSensitivityValue">50%</span>
+            </label>
+            <input type="range" class="hand-setting__slider" id="pinchSensitivitySlider" min="0" max="100" value="50">
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- ══════════ MOBILE BOTTOM NAV ══════════ -->
     <nav class="mobile-nav" id="mobileNav">
       <button class="mobile-nav__item mobile-nav__item--active" data-tab="servos">
