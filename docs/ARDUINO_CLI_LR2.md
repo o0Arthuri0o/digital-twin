@@ -56,6 +56,8 @@ arduino-cli monitor -p <PORT> -c baudrate=9600
 ```text
 Актуаторы:
 A90B90C90D90E90;
+SERVO_STATUS?;
+SERVO_HOME;
 
 OLED:
 OLED_TEXT:Khusainov AA 4241v;
@@ -71,6 +73,24 @@ OLED_BITMAP?;
 ```
 
 Ожидаемый ответ на пакет сервоприводов:
+
+```text
+OK SERVOS A90B90C90D90E90;
+```
+
+Диагностика сервоприводов:
+
+```text
+SERVO_STATUS?;
+```
+
+До первой servo-команды ожидается `attached=0`, после `SERVO_HOME;` или пакета `A...E...;` — `attached=1`:
+
+```text
+OK SERVO_STATUS attached=1 pins=A:D9=90,B:D6=90,C:D5=90,D:D3=90,E:D11=90;
+```
+
+Команда `SERVO_HOME;` подключает сервоприводы и выставляет документированное home-положение `90`:
 
 ```text
 OK SERVOS A90B90C90D90E90;
