@@ -1,17 +1,26 @@
 import './style.css'
-import { initViewer3D, setServoAngle } from './viewer3d'
-import { initHandTracking, type HandTrackingCallbacks } from './handTracking'
+import { initViewer3D, renderOledPreview, setOledBitmap, setOledText, setServoAngle } from './viewer3d'
+import type { HandTrackerInstance, HandTrackingCallbacks } from './handTracking'
+import * as serial from './serial'
 
 const SERVO_CONFIG = [
   { id: 'A', min: 0, max: 180, initial: 90 },
-  { id: 'B', min: 0, max: 180, initial: 110 },
-  { id: 'C', min: 0, max: 180, initial: 45 },
+  { id: 'B', min: 0, max: 180, initial: 90 },
+  { id: 'C', min: 0, max: 180, initial: 90 },
   { id: 'D', min: 0, max: 180, initial: 90 },
   { id: 'E', min: 35, max: 90, initial: 90 },
 ] as const
 
 const values: number[] = SERVO_CONFIG.map(s => s.initial)
 let autoSend = false
+let oledAnglesMode = false
+let lastReceivedLine = ''
+let pendingServoPacket: string | null = null
+let servoSendTimer: ReturnType<typeof setTimeout> | null = null
+let lastSentServoPacket = ''
+
+const DEFAULT_OLED_TEXT = 'Khusainov AA 4241v'
+const SERVO_SEND_DEBOUNCE_MS = 80
 
 function $(sel: string) { return document.querySelector(sel) }
 function $$(sel: string) { return document.querySelectorAll(sel) }
@@ -65,13 +74,62 @@ function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
+function extractOledText(input: string): string | null {
+  const firstIndex = input.indexOf('%')
+  if (firstIndex === -1) return null
+
+  const secondIndex = input.indexOf('%', firstIndex + 1)
+  if (secondIndex === -1) return null
+
+  return input.slice(firstIndex + 1, secondIndex)
+}
+
+function updateOledPreview() {
+  const preview = $('#oledPreview') as HTMLCanvasElement | null
+  if (preview) renderOledPreview(preview)
+}
+
+function showOledText(text: string) {
+  setOledText(text)
+  updateOledPreview()
+}
+
+function showOledBitmap(data: Uint8Array) {
+  setOledBitmap(data)
+  updateOledPreview()
+}
+
+function buildAnglesText(): string {
+  return SERVO_CONFIG.map((s, i) => `${s.id}${values[i]}`).join(' ')
+}
+
+function updateOledAnglesPreview() {
+  if (oledAnglesMode) {
+    showOledText(buildAnglesText())
+  }
+}
+
+function clampServoValue(index: number, value: number): number {
+  const config = SERVO_CONFIG[index]
+  if (!config) return value
+  return Math.max(config.min, Math.min(config.max, value))
+}
+
 // ─── Initialize sliders ─────────────────────────────
 function initSliders() {
   $$('.servo__slider').forEach(el => {
     const slider = el as HTMLInputElement
     const index = +(slider.dataset.index ?? 0)
+    slider.value = String(values[index])
+
+    const valueEl = $(`#v${index}`)
+    if (valueEl) {
+      const numEl = valueEl.querySelector('.servo__number')
+      if (numEl) numEl.textContent = slider.value
+    }
 
     updateTrackFill(index)
+    setServoAngle(index, values[index])
 
     slider.addEventListener('input', () => {
       values[index] = +slider.value
@@ -83,16 +141,51 @@ function initSliders() {
       updateTrackFill(index)
       updatePacketPreview()
       setServoAngle(index, values[index])
+      updateOledAnglesPreview()
 
-      if (autoSend) {
-        addLogEntry('tx', buildPacket())
-      }
+      scheduleServoSend()
     })
   })
 }
 
 function buildPacket(): string {
   return SERVO_CONFIG.map((s, i) => s.id + values[i]).join('') + ';'
+}
+
+async function sendServoPacket(packet = buildPacket(), force = false) {
+  if (!serial.isConnected()) return
+  if (!force && packet === lastSentServoPacket) return
+
+  try {
+    await serial.send(packet)
+    lastSentServoPacket = packet
+    addLogEntry('tx', packet)
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Ошибка отправки'
+    addLogEntry('err', msg)
+  }
+}
+
+function scheduleServoSend() {
+  if (!autoSend || !serial.isConnected()) return
+
+  pendingServoPacket = buildPacket()
+  if (servoSendTimer) return
+
+  servoSendTimer = setTimeout(() => {
+    const packet = pendingServoPacket
+    pendingServoPacket = null
+    servoSendTimer = null
+    if (packet) sendServoPacket(packet)
+  }, SERVO_SEND_DEBOUNCE_MS)
+}
+
+function cancelPendingServoSend() {
+  pendingServoPacket = null
+  if (servoSendTimer) {
+    clearTimeout(servoSendTimer)
+    servoSendTimer = null
+  }
 }
 
 // ─── Toggle auto-send ───────────────────────────────
@@ -105,41 +198,198 @@ function initToggle() {
     toggle.classList.toggle('on', autoSend)
     toggle.setAttribute('aria-checked', String(autoSend))
     addLogEntry('sys', autoSend ? 'Авто-отправка включена' : 'Авто-отправка выключена')
+    if (autoSend) scheduleServoSend()
+    else cancelPendingServoSend()
   })
 }
 
-// ─── Connect / Disconnect buttons (UI-only stubs) ──
+// ─── Connect / Disconnect buttons ───────────────────
 function initConnectionUI() {
   const btnConnect = $('#btnConnect') as HTMLButtonElement | null
   const btnDisconnect = $('#btnDisconnect') as HTMLButtonElement | null
   const btnSend = $('#btnSend') as HTMLButtonElement | null
+  const baudSelect = $('#baudRate') as HTMLSelectElement | null
   const indicator = $('#statusIndicator')
   const statusText = $('#statusText')
 
-  btnConnect?.addEventListener('click', () => {
-    setConnectedUI(true)
-    addLogEntry('sys', 'Подключено (демо-режим)')
+  if (!serial.isSupported()) {
+    addLogEntry('err', 'Web Serial API не поддерживается. Используйте Chrome или Edge.')
+    if (btnConnect) btnConnect.disabled = true
+    return
+  }
+
+  serial.onReceive((data) => {
+    lastReceivedLine = data
+    addLogEntry('rx', data)
+
+    const oledText = extractOledText(data)
+    if (oledText !== null) {
+      showOledText(oledText)
+    }
   })
 
-  btnDisconnect?.addEventListener('click', () => {
+  serial.onBitmapReceive((data) => {
+    showOledBitmap(data)
+    addLogEntry('rx', `OLED bitmap received: ${data.length} bytes`)
+  })
+
+  serial.onDisconnect(() => {
+    cancelPendingServoSend()
+    lastSentServoPacket = ''
+    setOledAnglesMode(false)
+    setConnectedUI(false)
+    addLogEntry('sys', 'Устройство отключено')
+  })
+
+  btnConnect?.addEventListener('click', async () => {
+    const baudRate = baudSelect ? parseInt(baudSelect.value, 10) : 9600
+
+    btnConnect.disabled = true
+    btnConnect.textContent = 'Подключение...'
+
+    try {
+      await serial.connect(baudRate)
+      lastSentServoPacket = ''
+      setConnectedUI(true)
+      addLogEntry('sys', `Подключено (${baudRate} baud)`)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Ошибка подключения'
+      addLogEntry('err', msg)
+      btnConnect.disabled = false
+      btnConnect.innerHTML = `
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 2v5M5 4l3 3 3-3M2 10v2a2 2 0 002 2h8a2 2 0 002-2v-2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        Подключить
+      `
+    }
+  })
+
+  btnDisconnect?.addEventListener('click', async () => {
+    cancelPendingServoSend()
+    await serial.disconnect()
+    lastSentServoPacket = ''
+    setOledAnglesMode(false)
     setConnectedUI(false)
     addLogEntry('sys', 'Отключено')
   })
 
-  btnSend?.addEventListener('click', () => {
-    addLogEntry('tx', buildPacket())
-    setTimeout(() => {
-      addLogEntry('rx', 'OK: angles received')
-    }, 150)
+  btnSend?.addEventListener('click', async () => {
+    if (!serial.isConnected()) return
+
+    cancelPendingServoSend()
+    await sendServoPacket(buildPacket(), true)
   })
 
   function setConnectedUI(connected: boolean) {
-    if (btnConnect) btnConnect.style.display = connected ? 'none' : ''
+    if (btnConnect) {
+      btnConnect.style.display = connected ? 'none' : ''
+      btnConnect.disabled = false
+      btnConnect.innerHTML = `
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 2v5M5 4l3 3 3-3M2 10v2a2 2 0 002 2h8a2 2 0 002-2v-2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        Подключить
+      `
+    }
     if (btnDisconnect) btnDisconnect.style.display = connected ? '' : 'none'
     if (btnSend) btnSend.disabled = !connected
+    setOledButtonsEnabled(connected)
     indicator?.classList.toggle('connected', connected)
     if (statusText) statusText.textContent = connected ? 'Подключено' : 'Отключено'
   }
+}
+
+function setOledButtonsEnabled(enabled: boolean) {
+  const buttons = [
+    $('#btnOledSend') as HTMLButtonElement | null,
+    $('#btnOledRead') as HTMLButtonElement | null,
+    $('#btnOledBitmap') as HTMLButtonElement | null,
+    $('#btnOledAngles') as HTMLButtonElement | null,
+  ]
+
+  buttons.forEach((button) => {
+    if (button) button.disabled = !enabled
+  })
+}
+
+function setOledAnglesMode(enabled: boolean) {
+  oledAnglesMode = enabled
+  const btnAngles = $('#btnOledAngles') as HTMLButtonElement | null
+  btnAngles?.classList.toggle('btn--active', enabled)
+  btnAngles?.setAttribute('aria-pressed', String(enabled))
+}
+
+// ─── OLED display controls ─────────────────────────
+function initOledPanel() {
+  const input = $('#oledTextInput') as HTMLInputElement | null
+  const btnSend = $('#btnOledSend') as HTMLButtonElement | null
+  const btnRead = $('#btnOledRead') as HTMLButtonElement | null
+  const btnBitmap = $('#btnOledBitmap') as HTMLButtonElement | null
+  const btnAngles = $('#btnOledAngles') as HTMLButtonElement | null
+  const clearButton = $('#btnClearLog') as HTMLButtonElement | null
+
+  showOledText('OLED READY')
+
+  async function sendCommand(command: string) {
+    if (!serial.isConnected()) {
+      addLogEntry('err', 'Не подключено')
+      return
+    }
+
+    try {
+      await serial.send(command)
+      addLogEntry('tx', command)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Ошибка отправки'
+      addLogEntry('err', msg)
+    }
+  }
+
+  async function sendTextToOled() {
+    const text = input?.value.trim() || ''
+    if (!text) return
+
+    setOledAnglesMode(false)
+    clearButton?.setAttribute('disabled', 'true')
+    showOledText(text)
+    await sendCommand(`OLED_TEXT:${text};`)
+    clearButton?.removeAttribute('disabled')
+  }
+
+  btnSend?.addEventListener('click', sendTextToOled)
+
+  input?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') sendTextToOled()
+  })
+
+  btnRead?.addEventListener('click', async () => {
+    clearButton?.setAttribute('disabled', 'true')
+
+    const oledText = extractOledText(lastReceivedLine)
+    if (oledText !== null) {
+      showOledText(oledText)
+    }
+
+    await sendCommand('OLED_READ?;')
+    clearButton?.removeAttribute('disabled')
+  })
+
+  btnBitmap?.addEventListener('click', () => {
+    setOledAnglesMode(false)
+    sendCommand('OLED_BITMAP?;')
+  })
+
+  btnAngles?.addEventListener('click', async () => {
+    const nextMode = !oledAnglesMode
+    setOledAnglesMode(nextMode)
+
+    if (nextMode) {
+      showOledText(buildAnglesText())
+      await sendCommand('OLED_ANGLES?;')
+      return
+    }
+
+    const text = input?.value.trim() || DEFAULT_OLED_TEXT
+    showOledText(text)
+    await sendCommand(`OLED_TEXT:${text};`)
+  })
 }
 
 // ─── Manual input ───────────────────────────────────
@@ -147,13 +397,34 @@ function initManualInput() {
   const input = $('#manualInput') as HTMLInputElement | null
   const btn = $('#btnManualSend')
 
-  function send() {
+  function normalizeManualCommand(data: string): string {
+    if (data.endsWith(';')) return data
+
+    const knownCommand = data.startsWith('OLED_') ||
+      data.startsWith('OLED_TEXT:') ||
+      /^A\d+B\d+C\d+D\d+E\d+$/.test(data)
+
+    return knownCommand ? `${data};` : data
+  }
+
+  async function send() {
     if (!input?.value.trim()) return
-    addLogEntry('tx', input.value.trim())
+
+    const data = normalizeManualCommand(input.value.trim())
     input.value = ''
-    setTimeout(() => {
-      addLogEntry('rx', 'echo: OK')
-    }, 120)
+
+    if (!serial.isConnected()) {
+      addLogEntry('err', 'Не подключено')
+      return
+    }
+
+    try {
+      await serial.send(data)
+      addLogEntry('tx', data)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Ошибка отправки'
+      addLogEntry('err', msg)
+    }
   }
 
   input?.addEventListener('keydown', (e) => {
@@ -228,7 +499,7 @@ function initMenuToggle() {
 }
 
 // ─── Hand Tracking Panel ─────────────────────
-let handTracker: ReturnType<typeof initHandTracking> | null = null
+let handTracker: HandTrackerInstance | null = null
 
 function initHandPanel() {
   const panel = $('#handPanel') as HTMLElement | null
@@ -270,26 +541,25 @@ function initHandPanel() {
     onAnglesUpdate: (angles) => {
       angles.forEach((angle, i) => {
         if (i < values.length) {
-          values[i] = angle
-          setServoAngle(i, angle)
+          const nextAngle = clampServoValue(i, angle)
+          values[i] = nextAngle
+          setServoAngle(i, nextAngle)
 
           const slider = $(`#s${i}`) as HTMLInputElement | null
           const valueEl = $(`#v${i}`)
           if (slider) {
-            slider.value = String(angle)
+            slider.value = String(nextAngle)
             updateTrackFill(i)
           }
           if (valueEl) {
             const numEl = valueEl.querySelector('.servo__number')
-            if (numEl) numEl.textContent = String(angle)
+            if (numEl) numEl.textContent = String(nextAngle)
           }
         }
       })
       updatePacketPreview()
-
-      if (autoSend) {
-        addLogEntry('tx', buildPacket())
-      }
+      updateOledAnglesPreview()
+      scheduleServoSend()
     },
     onStatusChange: (newStatus) => {
       status?.classList.remove('detecting', 'tracking')
@@ -308,17 +578,20 @@ function initHandPanel() {
     }
   }
 
-  // Initialize hand tracker
-  handTracker = initHandTracking(video, canvas, callbacks)
-
   // Start button
   btnStart?.addEventListener('click', async () => {
-    if (!handTracker) return
-
     btnStart.disabled = true
     btnStart.textContent = 'Запуск...'
 
     try {
+      if (!handTracker) {
+        const { initHandTracking } = await import('./handTracking')
+        handTracker = initHandTracking(video, canvas, callbacks, {
+          getSensitivity,
+          getPinchSensitivity,
+        })
+      }
+
       await handTracker.start()
       btnStart.style.display = 'none'
       if (btnStop) btnStop.style.display = ''
@@ -473,6 +746,7 @@ function init() {
   initConnectionUI()
   initManualInput()
   initClearLog()
+  initOledPanel()
   initMobileNav()
   initMenuToggle()
   initHandPanel()

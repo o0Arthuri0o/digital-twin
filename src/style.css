@@ -430,6 +430,12 @@ body::before {
   background: var(--bg-3);
 }
 
+.btn--active {
+  color: var(--cyan-400);
+  background: var(--cyan-glow);
+  border-color: var(--cyan-500);
+}
+
 .btn--sm { padding: 7px 10px; font-size: 11px; }
 .btn--full { width: 100%; margin-top: 8px; }
 
@@ -796,6 +802,38 @@ body::before {
   box-shadow: 0 0 0 2px var(--amber-glow);
 }
 .monitor-input__field::placeholder { color: var(--text-muted); }
+
+/* ═══════════ OLED DISPLAY ═══════════ */
+
+.panel--oled .panel__body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.oled-preview {
+  width: 100%;
+  aspect-ratio: 2 / 1;
+  image-rendering: pixelated;
+  background: #000;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.03);
+}
+
+.oled-input {
+  width: 100%;
+}
+
+.oled-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.oled-actions .btn {
+  justify-content: center;
+}
 
 /* ═══════════ MOBILE BOTTOM NAV ═══════════ */
 

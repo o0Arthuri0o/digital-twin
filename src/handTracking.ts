@@ -31,10 +31,16 @@ export interface HandTrackerInstance {
   stop: () => void
 }
 
+export interface HandTrackingOptions {
+  getSensitivity?: () => number
+  getPinchSensitivity?: () => number
+}
+
 export function initHandTracking(
   video: HTMLVideoElement,
   canvas: HTMLCanvasElement,
-  callbacks: HandTrackingCallbacks
+  callbacks: HandTrackingCallbacks,
+  options: HandTrackingOptions = {}
 ): HandTrackerInstance {
   let stream: MediaStream | null = null
   let isRunning = false
@@ -68,6 +74,18 @@ export function initHandTracking(
     return Math.max(min, Math.min(max, val))
   }
 
+  function sensitivityRange(center: number, baseHalfRange: number, sensitivity: number): [number, number] {
+    const normalized = clamp(sensitivity, 0, 1)
+    const scale = 1.4 - normalized * 0.8
+    const halfRange = baseHalfRange * scale
+    return [center - halfRange, center + halfRange]
+  }
+
+  function normalizeWithin(value: number, min: number, max: number): number {
+    if (max <= min) return 0
+    return clamp((value - min) / (max - min), 0, 1)
+  }
+
   /**
    * ПРОСТАЯ МОДЕЛЬ УПРАВЛЕНИЯ:
    *
@@ -87,14 +105,19 @@ export function initHandTracking(
     const indexMcp = landmarks[5]
     const pinkyMcp = landmarks[17]
 
+    const sensitivity = options.getSensitivity?.() ?? 0.5
+    const pinchSensitivity = options.getPinchSensitivity?.() ?? 0.5
+    const [handMin, handMax] = sensitivityRange(0.5, 0.3, sensitivity)
+    const [pinchMin, pinchMax] = sensitivityRange(0.095, 0.055, pinchSensitivity)
+
     // ═══ S1: БАЗА — горизонтальное положение руки ═══
     // Рука слева (x≈0.2) → 180°, рука справа (x≈0.8) → 0°
-    const baseNorm = clamp((wrist.x - 0.2) / 0.6, 0, 1)
+    const baseNorm = normalizeWithin(wrist.x, handMin, handMax)
     const base = Math.round((1 - baseNorm) * 180)
 
     // ═══ S2: ПЛЕЧО — вертикальное положение руки ═══
     // Рука вверху (y≈0.2) → 180°, рука внизу (y≈0.8) → 0°
-    const shoulderNorm = clamp((wrist.y - 0.2) / 0.6, 0, 1)
+    const shoulderNorm = normalizeWithin(wrist.y, handMin, handMax)
     const shoulder = Math.round((1 - shoulderNorm) * 180)
 
     // ═══ S3: ЛОКОТЬ — сжатие кулака ═══
@@ -114,14 +137,15 @@ export function initHandTracking(
     // Используем угол между указательным и мизинцем относительно горизонта
     const palmTilt = indexMcp.y - pinkyMcp.y
     // palmTilt > 0 → кисть наклонена вправо, < 0 → влево
-    const wristNorm = clamp((palmTilt + 0.15) / 0.3, 0, 1)
+    const tiltHalfRange = 0.15 * (1.4 - clamp(sensitivity, 0, 1) * 0.8)
+    const wristNorm = normalizeWithin(palmTilt, -tiltHalfRange, tiltHalfRange)
     const wristAngle = Math.round(wristNorm * 180)
 
     // ═══ S5: ЗАХВАТ — щипок (pinch) ═══
     // Расстояние между большим и указательным пальцем
     const pinchDist = distance(thumbTip, indexTip)
     // ~0.04 = пальцы касаются (захват закрыт), ~0.15 = разведены (захват открыт)
-    const pinchNorm = clamp((pinchDist - 0.04) / 0.11, 0, 1)
+    const pinchNorm = normalizeWithin(pinchDist, pinchMin, pinchMax)
     const gripper = Math.round(35 + pinchNorm * 55)  // 35° закрыт, 90° открыт
 
     return [base, shoulder, elbow, wristAngle, gripper]

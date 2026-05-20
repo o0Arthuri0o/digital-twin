@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "check:model": "node scripts/check-model.mjs",
+    "check:protocol": "node scripts/check-protocol.mjs",
     "preview": "vite preview"
   },
   "devDependencies": {
