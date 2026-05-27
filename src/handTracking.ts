@@ -146,7 +146,7 @@ export function initHandTracking(
     const pinchDist = distance(thumbTip, indexTip)
     // ~0.04 = пальцы касаются (захват закрыт), ~0.15 = разведены (захват открыт)
     const pinchNorm = normalizeWithin(pinchDist, pinchMin, pinchMax)
-    const gripper = Math.round(35 + pinchNorm * 55)  // 35° закрыт, 90° открыт
+    const gripper = Math.round(90 - pinchNorm * 55)  // 90° закрыт, 35° открыт
 
     return [base, shoulder, elbow, wristAngle, gripper]
   }

@@ -71,7 +71,7 @@ function updateRobot() {
   }
 
   if (parts.finger_r && parts.finger_l) {
-    const grip = THREE.MathUtils.degToRad(targetAngles.gripper - 35);
+    const grip = THREE.MathUtils.degToRad(90 - targetAngles.gripper);
     parts.finger_r.rotation.z = -grip;
     parts.finger_l.rotation.z = grip;
   }
